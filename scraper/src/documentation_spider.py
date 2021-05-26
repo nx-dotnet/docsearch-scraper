@@ -4,12 +4,14 @@ DocumentationSpider
 from scrapy.linkextractors.lxmlhtml import LxmlLinkExtractor
 from scrapy.spiders import CrawlSpider, Rule
 from scrapy.http import Request
+from scrapy.utils.sitemap import Sitemap, sitemap_urls_from_robots
 
 # Import for the sitemap behavior
 from scrapy.spiders import SitemapSpider
 from scrapy.spiders.sitemap import regex
 import re
 import os
+import pprint
 
 # End of import for the sitemap behavior
 
@@ -98,6 +100,8 @@ class DocumentationSpider(CrawlSpider, SitemapSpider):
                  follow=True),
         ]
 
+        pprint.pprint(config)
+
         # START _init_ part from SitemapSpider
         # We son't want to check anything if we don't even have a sitemap URL
         if config.sitemap_urls:
@@ -170,6 +174,7 @@ class DocumentationSpider(CrawlSpider, SitemapSpider):
             # We don't return self.parse(response) in order to avoid crawling those web page
 
     def parse_from_start_url(self, response):
+        pprint.pprint(response)
         if self.reason_to_stop is not None:
             raise CloseSpider(reason=self.reason_to_stop)
 
@@ -188,6 +193,7 @@ class DocumentationSpider(CrawlSpider, SitemapSpider):
         # Redirection redirect on a start url
         if not self.scrape_start_urls and (
                 response.url in self.start_urls or response.request.url in self.start_urls):
+            print("start-error")
             return False
 
         for rule in self._rules:
@@ -203,6 +209,7 @@ class DocumentationSpider(CrawlSpider, SitemapSpider):
                         response) and rule.link_extractor._link_allowed(
                     response.request):
                     continue
+            pprint.pprint(rule)
             return False
 
         return True
@@ -250,3 +257,42 @@ class DocumentationSpider(CrawlSpider, SitemapSpider):
                 c = getattr(self, c)
             self._cbs.append((regex(r), c))
         self._follow = [regex(x) for x in self.sitemap_follow]
+
+    def _parse_sitemap(self, *args):
+        pprint.pprint(args)
+        self._parse_sitemap(args)
+
+    def _parse_sitemap(self, response):
+        if response.url.endswith('/robots.txt'):
+            for url in sitemap_urls_from_robots(response.text, base_url=response.url):
+                yield Request(url, callback=self._parse_sitemap)
+        else:
+            body = self._get_sitemap_body(response)
+            if body is None:
+                print("Ignoring invalid sitemap: %(response)s",
+                               {'response': response}, extra={'spider': self})
+                return
+
+            s = Sitemap(body)
+            it = self.sitemap_filter(s)
+
+            if s.type == 'sitemapindex':
+                for loc in iterloc(it, self.sitemap_alternate_links):
+                    if any(x.search(loc) for x in self._follow):
+                        yield Request(loc, callback=self._parse_sitemap)
+            elif s.type == 'urlset':
+                pprint.pprint(self._cbs)
+                for loc in iterloc(it, self.sitemap_alternate_links):
+                    for r, c in self._cbs:
+                        if r.search(loc):
+                            yield Request(loc, callback=c)
+                            break
+
+
+def iterloc(it, alt=False):
+    for d in it:
+        yield d['loc']
+
+        # Also consider alternate URLs (xhtml:link rel="alternate")
+        if alt and 'alternate' in d:
+            yield from d['alternate']
